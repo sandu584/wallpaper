@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: black;
+      font-family: sans-serif;
+    }
+
+    canvas {
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+    }
+
+    #toggleMenuBtn {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      color: #00FF00;
+      border: 1px solid #555;
+      padding: 8px 12px;
+      cursor: pointer;
+      border-radius: 4px;
+      font-weight: bold;
+      z-index: 20;
+      transition: opacity 0.5s ease;
+      width: max-content;
+    }
+
+    .controls {
+      position: absolute;
+      top: 70px;
+      left: 20px;
+      color: white;
+      background: rgba(0, 0, 0, 0.9);
+      padding: 15px;
+      border-radius: 8px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 300px;
+      transition: transform 0.3s ease-in-out;
+      max-height: 80vh;
+      overflow-y: auto;
+      border: 1px solid white;
+    }
+
+    .controls.hidden {
+      transform: translateX(-340px);
+      display: none;
+    }
+
+    input,
+    select {
+      background: #333;
+      color: white;
+      border: 1px solid #555;
+      padding: 4px;
+      border-radius: 4px;
+    }
+
+    input[type="number"] {
+      width: 50px;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+
+    button {
+      border: none;
+      padding: 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+      width: 100%;
+      margin-top: 5px;
+      color: white;
+      cursor: pointer;
+    }
+
+    #downloadBtn {
+      background: #4CAF50;
+    }
+
+    #randomBtn {
+      background: #2196F3;
+    }
+
+    #fullscreenBtn {
+      background: #607D8B;
+    }
+  </style>
+</head>
+
+<body>
+  <button id="toggleMenuBtn">☰</button>
+  <div class="controls" id="menu">
+    <div class="row"><label>Orientation:</label>
+      <select id="orient">
+        <option value="desktop">Desktop</option>
+        <option value="mobile">Mobile</option>
+      </select>
+    </div>
+    <div class="row"><label>Threshold (Sensitivity):</label>
+      <div style="display:flex; gap:5px;">
+        <input type="range" id="tSlider" min="1" max="100" value="30">
+        <input type="number" id="tInput" value="30">
+      </div>
+    </div>
+    <div class="row"><label>Density:</label>
+      <div style="display:flex; gap:5px;">
+        <input type="range" id="dSlider" min="1" max="100" value="95">
+        <input type="number" id="dInput" value="95">
+      </div>
+    </div>
+    <div class="row"><label>Ghosting (Trails):</label>
+      <input type="range" id="gSlider" min="0" max="98" value="80">
+    </div>
+    <div class="row"><label>Edge Mode:</label><input type="checkbox" id="edgeToggle"></div>
+    <div class="row"><label>Mirror:</label><input type="checkbox" id="mirrorToggle" checked></div>
+    <div class="row"><label>Color 1 (Top):</label><input type="color" id="color1" value="#00ff00"></div>
+    <div class="row"><label>Color 2 (Bottom):</label><input type="color" id="color2" value="#0088ff"></div>
+    <div class="row"><label>Chars:</label><input type="text" id="charInput" value=" .:-=+*#%@"></div>
+    <button id="fullscreenBtn">📺 Toggle Full Screen</button>
+    <button id="randomBtn">🎲 Randomize Style</button>
+    <button id="downloadBtn">📥 Download HD Wallpaper</button>
+  </div>
+  <video id="video" autoplay playsinline style="display:none"></video>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const menu = document.getElementById('menu');
+    const toggleBtn = document.getElementById('toggleMenuBtn');
+
+    toggleBtn.onclick = () => {
+      menu.classList.toggle('hidden');
+      toggleBtn.innerText = menu.classList.contains('hidden') ? "☰" : "☰";
+    };
+
+    document.getElementById('fullscreenBtn').onclick = () => {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    };
+
+    const tSlider = document.getElementById('tSlider'), tInput = document.getElementById('tInput');
+    const dSlider = document.getElementById('dSlider'), dInput = document.getElementById('dInput');
+    const gSlider = document.getElementById('gSlider'), color1 = document.getElementById('color1'), color2 = document.getElementById('color2');
+    const edgeToggle = document.getElementById('edgeToggle'), charInput = document.getElementById('charInput');
+
+    function sync(s, i) { s.oninput = () => i.value = s.value; i.oninput = () => s.value = i.value; }
+    sync(tSlider, tInput); sync(dSlider, dInput);
+
+    const sampleCanvas = document.createElement('canvas');
+    const sCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.onresize = resizeCanvas;
+    resizeCanvas();
+
+    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => { video.srcObject = stream; });
+
+    function getBrightness(data, x, y, width) {
+      const i = (Math.floor(y) * width + Math.floor(x)) * 4;
+      return (data[i] + data[i + 1] + data[i + 2]) / 3;
+    }
+
+    function drawToCanvas(targetCtx, targetCanvas, sourceVideo, isMirror, isHD = false) {
+      const threshold = parseInt(tSlider.value);
+      const density = parseInt(dSlider.value);
+      const ghostingValue = parseInt(gSlider.value);
+      const chars = charInput.value || " ";
+      const cols = 50 + (density * 4);
+      const stepX = targetCanvas.width / cols;
+      const stepY = stepX * 1.6;
+      const fontSize = stepX * 1.3;
+
+      // ADAPTIVE OFFSET: Small for preview, Proportional for HD
+      const edgeOffset = isHD ? Math.max(2, Math.floor(stepX / 2.5)) : 2;
+      const edgeThresholdMultiplier = isHD ? 0.5 : 0.8;
+
+      if (!isHD) {
+        targetCtx.fillStyle = `rgba(0, 0, 0, ${1 - (ghostingValue / 100)})`;
+        targetCtx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+      } else {
+        targetCtx.fillStyle = "black";
+        targetCtx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+      }
+
+      if (sourceVideo.videoWidth === 0) return;
+      const tW = targetCanvas.width, tH = targetCanvas.height;
+      const ratio = Math.max(tW / sourceVideo.videoWidth, tH / sourceVideo.videoHeight);
+      const dW = sourceVideo.videoWidth * ratio, dH = sourceVideo.videoHeight * ratio;
+      const dX = (tW - dW) / 2, dY = (tH - dH) / 2;
+
+      sampleCanvas.width = tW; sampleCanvas.height = tH;
+      sCtx.drawImage(sourceVideo, dX, dY, dW, dH);
+      const data = sCtx.getImageData(0, 0, tW, tH).data;
+
+      const grad = targetCtx.createLinearGradient(0, 0, 0, tH);
+      grad.addColorStop(0, color1.value); grad.addColorStop(1, color2.value);
+
+      targetCtx.save();
+      if (isMirror) { targetCtx.translate(tW, 0); targetCtx.scale(-1, 1); }
+      targetCtx.fillStyle = grad;
+      targetCtx.font = `bold ${fontSize}px monospace`;
+      targetCtx.textAlign = "center"; targetCtx.textBaseline = "middle";
+
+      for (let y = edgeOffset; y < tH - edgeOffset; y += stepY) {
+        for (let x = edgeOffset; x < tW - edgeOffset; x += stepX) {
+          const center = getBrightness(data, x, y, tW);
+          let shouldDraw = false;
+
+          if (edgeToggle.checked) {
+            const right = getBrightness(data, x + edgeOffset, y, tW);
+            const bottom = getBrightness(data, x, y + edgeOffset, tW);
+            const magnitude = Math.abs(center - right) + Math.abs(center - bottom);
+            shouldDraw = magnitude > (threshold * edgeThresholdMultiplier);
+          } else {
+            shouldDraw = center >= (threshold * 2);
+          }
+
+          if (shouldDraw) {
+            const charIndex = Math.floor((center / 255) * (chars.length - 1));
+            targetCtx.fillText(chars[charIndex], x, y);
+          }
+        }
+      }
+      targetCtx.restore();
+    }
+
+    function render() {
+      if (video.videoWidth > 0) drawToCanvas(ctx, canvas, video, document.getElementById('mirrorToggle').checked);
+      requestAnimationFrame(render);
+    }
+
+    document.getElementById('randomBtn').onclick = () => {
+      const hex = () => '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+      color1.value = hex(); color2.value = hex();
+      tSlider.value = tInput.value = Math.floor(Math.random() * 40) + 10;
+    };
+
+    document.getElementById('downloadBtn').onclick = () => {
+      const out = document.createElement('canvas');
+      const isMobile = document.getElementById('orient').value === 'mobile';
+      out.width = isMobile ? 1440 : 3840; out.height = isMobile ? 2560 : 2160;
+      drawToCanvas(out.getContext('2d'), out, video, document.getElementById('mirrorToggle').checked, true);
+      const link = document.createElement('a');
+      link.download = `perfect-ascii-wallpaper.png`;
+      link.href = out.toDataURL('image/png', 1.0);
+      link.click();
+    };
+    video.onloadedmetadata = () => requestAnimationFrame(render);
+  </script>
+</body>
+
+</html>
